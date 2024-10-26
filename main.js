@@ -1,15 +1,17 @@
 const config = {
     type: Phaser.AUTO,
-    width: 360,
-    height: 640,
+    width: 320,  // Ancho fijo más estrecho
+    height: 600, // Alto fijo más largo para móviles
     scene: {
         preload: preload,
         create: create,
-        update: update
+        update: update,
+        init: init
     },
     scale: {
         mode: Phaser.Scale.FIT,
-        autoCenter: Phaser.Scale.CENTER_BOTH
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+        parent: 'game',
     },
     physics: {
         default: 'arcade',
@@ -22,183 +24,168 @@ const config = {
 
 const game = new Phaser.Game(config);
 
+// Ajustamos las dimensiones del laberinto para ser más vertical
+const MAZE_WIDTH = 11;  // Más estrecho
+const MAZE_HEIGHT = 21; // Más alto
+let CELL_SIZE;
+const PLAYER_SPEED = 160;
+
+let maze;
+let prize;
 let player;
 let walls;
-let prize;
-let cursors;
-let tileSize = 32;
-let isMoving = false;
-let moveDirection = { x: 0, y: 0 };
-let timerText;
-let timeLeft = 60; // 60 segundos para completar el laberinto
-let timerEvent;
-let restartButton;
-let gameOver = false;
+let gameWon = false;
 
-const maze = [
-    [1,1,1,1,1,1,1,1,1,1],
-    [1,0,0,0,0,0,1,0,0,1],
-    [1,0,1,1,1,0,1,0,1,1],
-    [1,0,0,0,1,0,0,0,0,1],
-    [1,1,1,0,1,1,1,1,0,1],
-    [1,0,0,0,0,0,0,0,0,1],
-    [1,0,1,1,1,1,1,1,0,1],
-    [1,0,0,0,0,0,0,1,0,1],
-    [1,1,1,1,1,1,0,1,0,1],
-    [1,0,0,0,0,0,0,0,0,1],
-    [1,1,1,1,1,1,1,1,1,1]
+function generateMazeWithExit(width, height) {
+    let maze = Array(height).fill().map(() => Array(width).fill(1));
     
-];
+    const isInBounds = (x, y) => x > 0 && x < width - 1 && y > 0 && y < height - 1;
+    
+    const getUnvisitedNeighbors = (x, y) => {
+        const neighbors = [
+            [x, y - 2], // arriba
+            [x + 2, y], // derecha
+            [x, y + 2], // abajo
+            [x - 2, y]  // izquierda
+        ];
+        return neighbors.filter(([nx, ny]) => 
+            isInBounds(nx, ny) && maze[ny][nx] === 1
+        );
+    };
+
+    const startX = 1;
+    const startY = 1;
+    maze[startY][startX] = 0;
+
+    const stack = [[startX, startY]];
+
+    while (stack.length > 0) {
+        const [currentX, currentY] = stack[stack.length - 1];
+        const neighbors = getUnvisitedNeighbors(currentX, currentY);
+
+        if (neighbors.length > 0) {
+            const [nextX, nextY] = neighbors[Math.floor(Math.random() * neighbors.length)];
+            maze[nextY][nextX] = 0;
+            maze[(currentY + nextY) / 2][(currentX + nextX) / 2] = 0;
+            stack.push([nextX, nextY]);
+        } else {
+            stack.pop();
+        }
+    }
+
+
+    
+    return maze;
+}
+
+function init() {
+    // Calcular el tamaño de celda basado en el área disponible
+    const cellWidth = this.scale.width / MAZE_WIDTH;
+    const cellHeight = this.scale.height / MAZE_HEIGHT;
+    CELL_SIZE = Math.min(cellWidth, cellHeight);
+}
 
 function preload() {
-    this.load.image('player', 'img/player.png');
-    this.load.image('wall', 'img/wall.png');
-    this.load.image('prize', 'img/prize.png');
-    this.load.image('floor', 'img/floor.png');
+    this.load.image('wall', 'public/MuROElectricidad.png');
+    this.load.image('path', 'public/cuadrado.png');
+    this.load.image('prize', 'public/premio.png');
+    this.load.image('player', 'public/completo (1).png');
 }
 
 function create() {
-    console.log(maze);
-    tileSize = Math.min(this.sys.game.config.width / maze[0].length, this.sys.game.config.height / maze.length);
-
-    createMazeElements(this);
+    const mazePixelWidth = MAZE_WIDTH * CELL_SIZE;
+    const mazePixelHeight = MAZE_HEIGHT * CELL_SIZE;
     
-    // Configurar controles
-    cursors = this.input.keyboard.createCursorKeys();
-    
-    // Configurar controles táctiles
-    this.input.on('pointerdown', handlePointerDown, this);
-    this.input.on('pointermove', handlePointerMove, this);
-    this.input.on('pointerup', handlePointerUp, this);
+    const offsetX = (this.scale.width - mazePixelWidth) / 2;
+    const offsetY = (this.scale.height - mazePixelHeight) / 2;
 
-    // Añadir temporizador
-    timerText = this.add.text(10, 10, 'Tiempo: 60', { fontSize: '20px', fill: '#fff', stroke: '#000', strokeThickness: 2 });
-    timerEvent = this.time.addEvent({ delay: 1000, callback: updateTimer, callbackScope: this, loop: true });
-
-    // Añadir botón de reinicio
-    restartButton = this.add.text(this.sys.game.config.width - 10, 10, 'Reiniciar', { fontSize: '20px', fill: '#fff', stroke: '#000', strokeThickness: 2 })
-        .setOrigin(1, 0)
-        .setInteractive()
-        .on('pointerdown', restartGame, this);
-}
-
-function update() {
-    if (gameOver) return;
-
-    // Movimiento del jugador
-    if (cursors.left.isDown || moveDirection.x < 0) {
-        player.setVelocityX(-160);
-    } else if (cursors.right.isDown || moveDirection.x > 0) {
-        player.setVelocityX(160);
-    } else {
-        player.setVelocityX(0);
-    }
-
-    if (cursors.up.isDown || moveDirection.y < 0) {
-        player.setVelocityY(-160);
-    } else if (cursors.down.isDown || moveDirection.y > 0) {
-        player.setVelocityY(160);
-    } else {
-        player.setVelocityY(0);
-    }
-
-    // Comprobar si el jugador ha alcanzado el premio
-    if (Phaser.Geom.Intersects.RectangleToRectangle(player.getBounds(), prize.getBounds())) {
-        gameOver = true;
-        this.add.text(this.sys.game.config.width / 2, this.sys.game.config.height / 2, '¡Ganaste!', { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
-        this.physics.pause();
-        timerEvent.remove();
-    }
-}
-
-function createMazeElements(scene) {
-    // Crear suelo
-    for (let y = 0; y < maze.length; y++) {
-        for (let x = 0; x < maze[y].length; x++) {
-            let floor = scene.add.image(x * tileSize + tileSize / 2, y * tileSize + tileSize / 2, 'floor');
-            floor.setDisplaySize(tileSize, tileSize);
+    // Dibujamos los caminos como base
+    for (let y = 0; y < MAZE_HEIGHT; y++) {
+        for (let x = 0; x < MAZE_WIDTH; x++) {
+            this.add.image(
+                offsetX + x * CELL_SIZE,
+                offsetY + y * CELL_SIZE,
+                'path'
+            )
+            .setOrigin(0)
+            .setDisplaySize(CELL_SIZE, CELL_SIZE);
         }
     }
 
-    // Crear paredes
-    walls = scene.physics.add.staticGroup();
+    walls = this.physics.add.staticGroup();
+    maze = generateMazeWithExit(MAZE_WIDTH, MAZE_HEIGHT);
+    
     for (let y = 0; y < maze.length; y++) {
         for (let x = 0; x < maze[y].length; x++) {
             if (maze[y][x] === 1) {
-                let wall = walls.create(x * tileSize + tileSize / 2, y * tileSize + tileSize / 2, 'wall');
-                wall.setDisplaySize(tileSize, tileSize);
-                wall.refreshBody();
+                const wall = walls.create(
+                    offsetX + x * CELL_SIZE + CELL_SIZE/2,
+                    offsetY + y * CELL_SIZE + CELL_SIZE/2,
+                    'wall'
+                );
+                wall.setDisplaySize(CELL_SIZE, CELL_SIZE);
+                wall.setImmovable(true);
+                wall.body.setSize(CELL_SIZE, CELL_SIZE);
             }
         }
     }
 
-    // Crear jugador en la esquina superior izquierda
-    player = scene.physics.add.sprite(tileSize * 1.5, tileSize * 1.5, 'player');
-    player.setCollideWorldBounds(true);
-    player.setDisplaySize(tileSize * 0.8, tileSize * 0.8);
-    player.body.setSize(player.displayWidth * 0.8, player.displayHeight * 0.8);
+    // Colocamos el premio en la parte inferior
+    const prizeSize = CELL_SIZE * 0.8;
+    prize = this.physics.add.sprite(
+        offsetX + Math.floor(MAZE_WIDTH/2) * CELL_SIZE + CELL_SIZE/2,
+        offsetY + (MAZE_HEIGHT - 1.5) * CELL_SIZE,
+        'prize'
+    )
+    .setDisplaySize(prizeSize, prizeSize);
+    prize.body.setSize(prizeSize, prizeSize);
 
-    // Crear premio
-    let prizePosition = findEmptyPosition();
-    prize = scene.physics.add.sprite(prizePosition.x * tileSize + tileSize / 2, prizePosition.y * tileSize + tileSize / 2, 'prize');
-    prize.setDisplaySize(tileSize * 0.8, tileSize * 0.8);
+    // Colocamos el jugador en la parte superior
+    const playerSize = CELL_SIZE * 0.7;
+    player = this.physics.add.sprite(
+        offsetX + Math.floor(MAZE_WIDTH/2) * CELL_SIZE + CELL_SIZE/2,
+        offsetY + CELL_SIZE + CELL_SIZE/2,
+        'player'
+    )
+    .setDisplaySize(playerSize, playerSize);
+    player.body.setSize(playerSize, playerSize);
 
-    // Configurar colisiones
-    scene.physics.add.collider(player, walls);
+    this.physics.add.collider(player, walls);
+    this.physics.add.overlap(player, prize, collectPrize, null, this);
+
+    const fontSize = Math.min(64, this.scale.width/10);
+    this.winText = this.add.text(this.scale.width/2, this.scale.height/2, '¡GANASTE!', {
+        fontSize: `${fontSize}px`,
+        fill: '#fff',
+        backgroundColor: '#000',
+        padding: { x: 20, y: 10 }
+    })
+    .setOrigin(0.5)
+    .setScrollFactor(0)
+    .setVisible(false);
+
 }
 
-function findEmptyPosition() {
-    let emptyPositions = [];
-    for (let y = 0; y < maze.length; y++) {
-        for (let x = 0; x < maze[y].length; x++) {
-            if (maze[y][x] === 0 && !(x === 1 && y === 1)) {
-                emptyPositions.push({x, y});
-            }
-        }
-    }
-    return emptyPositions[Math.floor(Math.random() * emptyPositions.length)];
-}
+function update() {
+    if (gameWon) return;
 
-function handlePointerDown(pointer) {
-    isMoving = true;
-    handlePointerMove(pointer);
-}
+    if (this.input.activePointer.isDown) {
+        const targetX = this.input.activePointer.x;
+        const targetY = this.input.activePointer.y;
 
-function handlePointerMove(pointer) {
-    if (isMoving) {
-        const dx = pointer.x - player.x;
-        const dy = pointer.y - player.y;
-        
-        if (Math.abs(dx) > Math.abs(dy)) {
-            moveDirection.x = Math.sign(dx);
-            moveDirection.y = 0;
-        } else {
-            moveDirection.x = 0;
-            moveDirection.y = Math.sign(dy);
-        }
-    }
-}
+        const angle = Math.atan2(targetY - player.y, targetX - player.x);
 
-function handlePointerUp() {
-    isMoving = false;
-    moveDirection.x = 0;
-    moveDirection.y = 0;
-}
+        player.setVelocityX(Math.cos(angle) * PLAYER_SPEED);
+        player.setVelocityY(Math.sin(angle) * PLAYER_SPEED);
 
-function updateTimer() {
-    if (timeLeft > 0) {
-        timeLeft--;
-        timerText.setText('Tiempo: ' + timeLeft);
-    } else {
-        gameOver = true;
-        this.add.text(this.sys.game.config.width / 2, this.sys.game.config.height / 2, '¡Tiempo agotado!', { fontSize: '32px', fill: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5);
-        this.physics.pause();
-        timerEvent.remove();
+        player.rotation = angle;
+    } else if (this.input.activePointer.justUp) {
+        player.setVelocity(0, 0);
     }
 }
 
-function restartGame() {
-    gameOver = false;
-    timeLeft = 60;
-    this.scene.restart();
+function collectPrize(player, prize) {
+    prize.destroy();
+    gameWon = true;
+    this.winText.setVisible(true);
 }
